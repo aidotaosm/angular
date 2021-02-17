@@ -83,6 +83,10 @@ export class InjectableDecoratorHandler implements
     };
   }
 
+  symbol(): null {
+    return null;
+  }
+
   register(node: ClassDeclaration): void {
     this.injectableRegistry.registerInjectable(node);
   }

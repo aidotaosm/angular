@@ -12,6 +12,7 @@ import * as ts from 'typescript';
 import {ErrorCode, FatalDiagnosticError} from '../../diagnostics';
 import {DefaultImportRecorder, Reference} from '../../imports';
 import {InjectableClassRegistry, MetadataRegistry} from '../../metadata';
+import {SemanticSymbol} from '../../ngmodule_semantics/src/api';
 import {PartialEvaluator} from '../../partial_evaluator';
 import {ClassDeclaration, Decorator, ReflectionHost, reflectObjectLiteral} from '../../reflection';
 import {LocalModuleScopeRegistry} from '../../scope';
@@ -25,6 +26,23 @@ import {findAngularDecorator, getValidConstructorDependencies, makeDuplicateDecl
 export interface PipeHandlerData {
   meta: R3PipeMetadata;
   metadataStmt: Statement|null;
+}
+
+/**
+ * Represents an Angular pipe.
+ */
+export class PipeSymbol extends SemanticSymbol {
+  constructor(decl: ClassDeclaration, public readonly name: string) {
+    super(decl);
+  }
+
+  isPublicApiAffected(previousSymbol: SemanticSymbol): boolean {
+    if (!(previousSymbol instanceof PipeSymbol)) {
+      return true;
+    }
+
+    return this.name !== previousSymbol.name;
+  }
 }
 
 export class PipeDecoratorHandler implements DecoratorHandler<Decorator, PipeHandlerData, unknown> {
@@ -112,6 +130,10 @@ export class PipeDecoratorHandler implements DecoratorHandler<Decorator, PipeHan
             clazz, this.reflector, this.defaultImportRecorder, this.isCore),
       },
     };
+  }
+
+  symbol(node: ClassDeclaration, analysis: Readonly<PipeHandlerData>): PipeSymbol {
+    return new PipeSymbol(node, analysis.meta.name);
   }
 
   register(node: ClassDeclaration, analysis: Readonly<PipeHandlerData>): void {

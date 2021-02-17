@@ -12,13 +12,15 @@ import * as ts from 'typescript';
 import {ErrorCode, FatalDiagnosticError, makeDiagnostic, makeRelatedInformation} from '../../diagnostics';
 import {DefaultImportRecorder, Reference, ReferenceEmitter} from '../../imports';
 import {InjectableClassRegistry, MetadataReader, MetadataRegistry} from '../../metadata';
+import {SemanticSymbol, SymbolResolver} from '../../ngmodule_semantics/src/api';
 import {PartialEvaluator, ResolvedValue} from '../../partial_evaluator';
-import {ClassDeclaration, DeclarationNode, Decorator, isNamedClassDeclaration, ReflectionHost, reflectObjectLiteral, typeNodeToValueExpr} from '../../reflection';
+import {ClassDeclaration, Decorator, isNamedClassDeclaration, ReflectionHost, reflectObjectLiteral, typeNodeToValueExpr} from '../../reflection';
 import {NgModuleRouteAnalyzer} from '../../routing';
 import {LocalModuleScopeRegistry, ScopeData} from '../../scope';
 import {FactoryTracker} from '../../shims/api';
 import {AnalysisOutput, CompileResult, DecoratorHandler, DetectResult, HandlerPrecedence, ResolveResult} from '../../transform';
 import {getSourceFile} from '../../util/src/typescript';
+import {ComponentSymbol} from './component';
 
 import {createValueHasWrongTypeError, getProviderDiagnostics} from './diagnostics';
 import {generateSetClassMetadataCall} from './metadata';
@@ -42,6 +44,44 @@ export interface NgModuleAnalysis {
 
 export interface NgModuleResolution {
   injectorImports: Expression[];
+}
+
+/**
+ * Represents an Angular NgModule.
+ */
+export class NgModuleSymbol extends SemanticSymbol {
+  private hasRemoteScopes = false;
+
+  constructor(decl: ClassDeclaration, private readonly rawDeclarations: ClassDeclaration[]) {
+    super(decl);
+  }
+
+  connect(resolve: SymbolResolver): void {
+    const declarations = this.rawDeclarations.map(resolve);
+
+    // An NgModule has remote scopes if any of its declared components is remotely scoped.
+    this.hasRemoteScopes =
+        declarations.some(symbol => symbol instanceof ComponentSymbol && symbol.isRemotelyScoped);
+  }
+
+  isPublicApiAffected(previousSymbol: SemanticSymbol): boolean {
+    if (!(previousSymbol instanceof NgModuleSymbol)) {
+      return true;
+    }
+
+    // NgModules don't have a public API that could affect emit of Angular decorated classes.
+    return false;
+  }
+
+  isEmitAffected(previousSymbol: SemanticSymbol): boolean {
+    if (!(previousSymbol instanceof NgModuleSymbol)) {
+      return true;
+    }
+
+    // The NgModule needs to be re-emitted if it does no longer have any remote scopes, or vice
+    // versa.
+    return this.hasRemoteScopes !== previousSymbol.hasRemoteScopes;
+  }
 }
 
 /**
@@ -291,6 +331,10 @@ export class NgModuleDecoratorHandler implements
         factorySymbolName: node.name.text,
       },
     };
+  }
+
+  symbol(node: ClassDeclaration, analysis: Readonly<NgModuleAnalysis>): NgModuleSymbol {
+    return new NgModuleSymbol(node, analysis.declarations.map(ref => ref.node));
   }
 
   register(node: ClassDeclaration, analysis: NgModuleAnalysis): void {

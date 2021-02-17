@@ -12,6 +12,8 @@ import * as ts from 'typescript';
 import {ErrorCode, FatalDiagnosticError} from '../../diagnostics';
 import {IncrementalBuild} from '../../incremental/api';
 import {IndexingContext} from '../../indexer';
+import {SemanticDepGraphUpdater} from '../../ngmodule_semantics';
+import {SemanticSymbol} from '../../ngmodule_semantics/src/api';
 import {PerfRecorder} from '../../perf';
 import {ClassDeclaration, DeclarationNode, Decorator, ReflectionHost} from '../../reflection';
 import {ProgramTypeCheckAdapter, TypeCheckContext} from '../../typecheck/api';
@@ -89,7 +91,8 @@ export class TraitCompiler implements ProgramTypeCheckAdapter {
       private reflector: ReflectionHost, private perf: PerfRecorder,
       private incrementalBuild: IncrementalBuild<ClassRecord, unknown>,
       private compileNonExportedClasses: boolean, private compilationMode: CompilationMode,
-      private dtsTransforms: DtsTransformRegistry) {
+      private dtsTransforms: DtsTransformRegistry,
+      private semanticDepGraphUpdater: SemanticDepGraphUpdater) {
     for (const handler of handlers) {
       this.handlersByName.set(handler.name, handler);
     }
@@ -182,6 +185,7 @@ export class TraitCompiler implements ProgramTypeCheckAdapter {
       let trait: Trait<unknown, unknown, unknown> = Trait.pending(handler, priorTrait.detected);
 
       if (priorTrait.state === TraitState.Analyzed || priorTrait.state === TraitState.Resolved) {
+        // TODO(zarend): pass a symbol to `toAnalyzed`
         trait = trait.toAnalyzed(priorTrait.analysis, priorTrait.analysisDiagnostics);
         if (trait.analysis !== null && trait.handler.register !== undefined) {
           trait.handler.register(record.node, trait.analysis);
@@ -291,6 +295,22 @@ export class TraitCompiler implements ProgramTypeCheckAdapter {
     }
 
     return foundTraits.length > 0 ? foundTraits : null;
+  }
+
+  private makeSymbolForTrait(
+      handler: DecoratorHandler<unknown, unknown, unknown>, decl: ClassDeclaration,
+      analysis: Readonly<unknown>): SemanticSymbol|null {
+    const symbol = handler.symbol(decl, analysis);
+    if (symbol !== null) {
+      const isPrimary = handler.precedence === HandlerPrecedence.PRIMARY;
+      if (!isPrimary) {
+        throw new Error(
+            `AssertionError: ${handler.name} returned a symbol but is not a primary handler.`);
+      }
+      this.semanticDepGraphUpdater.registerSymbol(symbol);
+    }
+
+    return symbol;
   }
 
   protected analyzeClass(clazz: ClassDeclaration, preanalyzeQueue: Promise<void>[]|null): void {

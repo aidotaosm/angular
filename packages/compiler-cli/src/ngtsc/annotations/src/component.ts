@@ -16,6 +16,8 @@ import {DefaultImportRecorder, ModuleResolver, Reference, ReferenceEmitter} from
 import {ComponentResolutionRegistry, DependencyTracker} from '../../incremental/api';
 import {IndexingContext} from '../../indexer';
 import {ClassPropertyMapping, ComponentResources, DirectiveMeta, DirectiveTypeCheckMeta, extractDirectiveTypeCheckMeta, InjectableClassRegistry, MetadataReader, MetadataRegistry, Resource, ResourceRegistry} from '../../metadata';
+import {SemanticSymbol} from '../../ngmodule_semantics/src/api';
+import {isArrayEqual, isSymbolEqual} from '../../ngmodule_semantics/src/util';
 import {EnumValue, PartialEvaluator, ResolvedValue} from '../../partial_evaluator';
 import {ClassDeclaration, DeclarationNode, Decorator, ReflectionHost, reflectObjectLiteral} from '../../reflection';
 import {ComponentScopeReader, LocalModuleScopeRegistry, TypeCheckScopeRegistry} from '../../scope';
@@ -26,7 +28,7 @@ import {SubsetOfKeys} from '../../util/src/typescript';
 
 import {ResourceLoader} from './api';
 import {createValueHasWrongTypeError, getDirectiveDiagnostics, getProviderDiagnostics} from './diagnostics';
-import {extractDirectiveMetadata, parseFieldArrayValue} from './directive';
+import {DirectiveSymbol, extractDirectiveMetadata, parseFieldArrayValue} from './directive';
 import {compileNgFactoryDefField} from './factory';
 import {generateSetClassMetadataCall} from './metadata';
 import {findAngularDecorator, isAngularCoreReference, isExpressionForwardReference, readBaseClass, resolveProvidersRequiringFactory, unwrapExpression, wrapFunctionExpressionsInParens} from './util';
@@ -109,6 +111,38 @@ export const enum ResourceTypeForDiagnostics {
   Template,
   StylesheetFromTemplate,
   StylesheetFromDecorator,
+}
+
+/**
+ * Represents an Angular component.
+ */
+export class ComponentSymbol extends DirectiveSymbol {
+  usedDirectives: SemanticSymbol[] = [];
+  usedPipes: SemanticSymbol[] = [];
+  isRemotelyScoped = false;
+
+  isEmitAffected(previousSymbol: SemanticSymbol, publicApiAffected: Set<SemanticSymbol>): boolean {
+    if (!(previousSymbol instanceof ComponentSymbol)) {
+      return true;
+    }
+
+    // Create an equality function that considers symbols equal if they represent the same
+    // declaration, but only if the symbol in the current compilation does not have its public API
+    // affected.
+    const isSymbolAffected = (current: SemanticSymbol, previous: SemanticSymbol) =>
+        isSymbolEqual(current, previous) && !publicApiAffected.has(current);
+
+    // The emit of a component is affected if either of the following is true:
+    //  1. The component used to be remotely scoped but no longer is, or vice versa.
+    //  2. The list of used directives has changed or any of those directives have had their public
+    //     API changed. If the used directives have been reordered but not otherwise affected then
+    //     the component must still be re-emitted, as this may affect directive instantiation order.
+    //  3. The list of used pipes has changed, or any of those pipes have had their public API
+    //     changed.
+    return this.isRemotelyScoped !== previousSymbol.isRemotelyScoped ||
+        !isArrayEqual(this.usedDirectives, previousSymbol.usedDirectives, isSymbolAffected) ||
+        !isArrayEqual(this.usedPipes, previousSymbol.usedPipes, isSymbolAffected);
+  }
 }
 
 /**
@@ -396,6 +430,12 @@ export class ComponentDecoratorHandler implements
       output.analysis!.meta.changeDetection = changeDetection;
     }
     return output;
+  }
+
+  symbol(node: ClassDeclaration, analysis: Readonly<ComponentAnalysisData>): ComponentSymbol {
+    return new ComponentSymbol(
+        node, analysis.meta.selector, analysis.inputs.propertyNames, analysis.outputs.propertyNames,
+        analysis.meta.exportAs);
   }
 
   register(node: ClassDeclaration, analysis: ComponentAnalysisData): void {

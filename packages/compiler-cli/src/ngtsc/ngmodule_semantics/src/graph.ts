@@ -9,12 +9,10 @@ import * as ts from 'typescript';
 
 import {absoluteFromSourceFile, AbsoluteFsPath} from '../../file_system';
 import {ComponentResolutionRegistry} from '../../incremental/api';
-import {DirectiveMeta, NgModuleMeta, PipeMeta} from '../../metadata';
 import {ClassDeclaration} from '../../reflection';
 import {getSourceFile} from '../../util/src/typescript';
 
 import {SemanticSymbol, SymbolResolver} from './api';
-import {ComponentSymbol, DirectiveSymbol, NgModuleSymbol, PipeSymbol} from './symbols';
 
 export interface SemanticDependencyResult {
   /**
@@ -34,9 +32,9 @@ export interface SemanticDependencyResult {
  * by this symbol. This allows the unresolved symbol to still be compared to a symbol from a prior
  * compilation.
  */
-class UnresolvedSymbol extends SemanticSymbol {
-  isPublicApiAffected(): never {
-    throw new Error('Invalid state: unresolved symbols should not be diffed');
+export class OpaqueSymbol extends SemanticSymbol {
+  isPublicApiAffected(): false {
+    return false;
   }
 }
 
@@ -54,26 +52,18 @@ export class SemanticDepGraph {
    * identifier are only able to find themselves in a prior graph if their declaration node is
    * identical.
    *
-   * @param decl
-   * @param factory
+   * @param symbol
    */
-  registerSymbol(
-      decl: ClassDeclaration,
-      factory: (path: AbsoluteFsPath, decl: ClassDeclaration, identifier: string|null) =>
-          SemanticSymbol): void {
-    const path = absoluteFromSourceFile(getSourceFile(decl));
-    const identifier = getSymbolIdentifier(decl);
-
-    const symbol = factory(path, decl, identifier);
-    this.symbolByDecl.set(decl, symbol);
+  registerSymbol(symbol: SemanticSymbol): void {
+    this.symbolByDecl.set(symbol.decl, symbol);
 
     if (symbol.identifier !== null) {
       // If the symbol has a unique identifier, record it in the file that declares it. This enables
       // the symbol to be requested by its unique name.
-      if (!this.files.has(path)) {
-        this.files.set(path, new Map<string, SemanticSymbol>());
+      if (!this.files.has(symbol.path)) {
+        this.files.set(symbol.path, new Map<string, SemanticSymbol>());
       }
-      this.files.get(path)!.set(symbol.identifier, symbol);
+      this.files.get(symbol.path)!.set(symbol.identifier, symbol);
     }
   }
 
@@ -147,7 +137,7 @@ export class SemanticDepGraphUpdater implements ComponentResolutionRegistry {
    * Contains unresolved symbols that were created for declarations for which there was no symbol
    * registered, which happens for e.g. external declarations.
    */
-  private readonly unresolvedSymbols = new Map<ClassDeclaration, UnresolvedSymbol>();
+  private readonly unresolvedSymbols = new Map<ClassDeclaration, OpaqueSymbol>();
 
   constructor(
       /**
@@ -155,32 +145,6 @@ export class SemanticDepGraphUpdater implements ComponentResolutionRegistry {
        * is the initial build.
        */
       private priorGraph: SemanticDepGraph|null) {}
-
-  addNgModule(metadata: NgModuleMeta): void {
-    this.newGraph.registerSymbol(metadata.ref.node, (path, decl, identifier) => {
-      return new NgModuleSymbol(
-          path, decl, identifier, metadata.declarations.map(decl => decl.node));
-    });
-  }
-
-  addDirective(metadata: DirectiveMeta): void {
-    this.newGraph.registerSymbol(metadata.ref.node, (path, decl, identifier) => {
-      if (metadata.isComponent) {
-        return new ComponentSymbol(
-            path, decl, identifier, metadata.selector, metadata.inputs.propertyNames,
-            metadata.outputs.propertyNames, metadata.exportAs);
-      }
-      return new DirectiveSymbol(
-          path, decl, identifier, metadata.selector, metadata.inputs.propertyNames,
-          metadata.outputs.propertyNames, metadata.exportAs);
-    });
-  }
-
-  addPipe(metadata: PipeMeta): void {
-    this.newGraph.registerSymbol(metadata.ref.node, (path, decl, identifier) => {
-      return new PipeSymbol(path, decl, identifier, metadata.name);
-    });
-  }
 
   register(
       component: ClassDeclaration, usedDirectives: ClassDeclaration[],
@@ -201,6 +165,10 @@ export class SemanticDepGraphUpdater implements ComponentResolutionRegistry {
     symbol.usedDirectives = usedDirectives.map(dir => this.getSymbol(dir));
     symbol.usedPipes = usedPipes.map(pipe => this.getSymbol(pipe));
     symbol.isRemotelyScoped = isRemotelyScoped;
+  }
+
+  registerSymbol(symbol: SemanticSymbol): void {
+    this.newGraph.registerSymbol(symbol);
   }
 
   /**
@@ -280,22 +248,20 @@ export class SemanticDepGraphUpdater implements ComponentResolutionRegistry {
       // No symbol has been recorded for the provided declaration, which would be the case if the
       // declaration is external. Return an unresolved symbol in that case, to allow the external
       // declaration to be compared to a prior compilation.
-      return this.getUnresolvedSymbol(decl);
+      return this.getOpaqueSymbol(decl);
     }
     return symbol;
   }
 
   /**
-   * Gets or creates an `UnresolvedSymbol` for the provided class declaration.
+   * Gets or creates an `OpaqueSymbol` for the provided class declaration.
    */
-  private getUnresolvedSymbol(decl: ClassDeclaration): UnresolvedSymbol {
+  private getOpaqueSymbol(decl: ClassDeclaration): OpaqueSymbol {
     if (this.unresolvedSymbols.has(decl)) {
       return this.unresolvedSymbols.get(decl)!;
     }
 
-    const path = absoluteFromSourceFile(getSourceFile(decl));
-    const identifier = getSymbolIdentifier(decl);
-    const symbol = new UnresolvedSymbol(path, decl, identifier);
+    const symbol = new OpaqueSymbol(decl);
     this.unresolvedSymbols.set(decl, symbol);
     return symbol;
   }

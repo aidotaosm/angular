@@ -20,7 +20,6 @@ import {ComponentResolutionRegistry} from '../../incremental/api';
 import {generateAnalysis, IndexedComponent, IndexingContext} from '../../indexer';
 import {ComponentResources, CompoundMetadataReader, CompoundMetadataRegistry, DtsMetadataReader, InjectableClassRegistry, LocalMetadataRegistry, MetadataReader, ResourceRegistry} from '../../metadata';
 import {ModuleWithProvidersScanner} from '../../modulewithproviders';
-import {SemanticDepGraphAdapter} from '../../ngmodule_semantics';
 import {PartialEvaluator} from '../../partial_evaluator';
 import {NOOP_PERF_RECORDER, PerfRecorder} from '../../perf';
 import {DeclarationNode, isNamedClassDeclaration, TypeScriptReflectionHost} from '../../reflection';
@@ -888,9 +887,7 @@ export class NgCompiler {
         new LocalModuleScopeRegistry(localMetaReader, depScopeReader, refEmitter, aliasingHost);
     const scopeReader: ComponentScopeReader = scopeRegistry;
     const semanticDepGraphUpdater = this.incrementalDriver.getSemanticDepGraphUpdater();
-    const semanticDepRegistry = new SemanticDepGraphAdapter(semanticDepGraphUpdater);
-    const metaRegistry =
-        new CompoundMetadataRegistry([localMetaRegistry, scopeRegistry, semanticDepRegistry]);
+    const metaRegistry = new CompoundMetadataRegistry([localMetaRegistry, scopeRegistry]);
     const injectableRegistry = new InjectableClassRegistry(reflector);
 
     const componentResolutionRegistry: ComponentResolutionRegistry = semanticDepGraphUpdater;
@@ -942,9 +939,7 @@ export class NgCompiler {
           this.options.enableI18nLegacyMessageIdFormat !== false, this.usePoisonedData,
           this.options.i18nNormalizeLineEndingsInICUs, this.moduleResolver, this.cycleAnalyzer,
           cycleHandlingStrategy, refEmitter, defaultImportTracker, this.incrementalDriver.depGraph,
-          injectableRegistry,
-          componentResolutionRegistry,
-          this.closureCompilerEnabled),
+          injectableRegistry, componentResolutionRegistry, this.closureCompilerEnabled),
 
       // TODO(alxhub): understand why the cast here is necessary (something to do with `null`
       // not being assignable to `unknown` when wrapped in `Readonly`).
@@ -974,7 +969,8 @@ export class NgCompiler {
 
     const traitCompiler = new TraitCompiler(
         handlers, reflector, this.perfRecorder, this.incrementalDriver,
-        this.options.compileNonExportedClasses !== false, compilationMode, dtsTransforms);
+        this.options.compileNonExportedClasses !== false, compilationMode, dtsTransforms,
+        semanticDepGraphUpdater);
 
     const templateTypeChecker = new TemplateTypeCheckerImpl(
         this.tsProgram, this.typeCheckingProgramStrategy, traitCompiler,
