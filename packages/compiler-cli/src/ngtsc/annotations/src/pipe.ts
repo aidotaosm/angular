@@ -45,7 +45,8 @@ export class PipeSymbol extends SemanticSymbol {
   }
 }
 
-export class PipeDecoratorHandler implements DecoratorHandler<Decorator, PipeHandlerData, unknown> {
+export class PipeDecoratorHandler implements
+    DecoratorHandler<Decorator, PipeHandlerData, PipeSymbol, unknown> {
   constructor(
       private reflector: ReflectionHost, private evaluator: PartialEvaluator,
       private metaRegistry: MetadataRegistry, private scopeRegistry: LocalModuleScopeRegistry,

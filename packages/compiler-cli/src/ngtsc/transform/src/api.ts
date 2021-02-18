@@ -160,7 +160,7 @@ export interface DecoratorHandler<D, A, S extends SemanticSymbol|null, R> {
    * `DecoratorHandler` a chance to leverage information from the whole compilation unit to enhance
    * the `analysis` before the emit phase.
    */
-  resolve?(node: ClassDeclaration, analysis: Readonly<A>): ResolveResult<R>;
+  resolve?(node: ClassDeclaration, analysis: Readonly<A>, symbol: S): ResolveResult<R>;
 
   typeCheck?
       (ctx: TypeCheckContext, node: ClassDeclaration, analysis: Readonly<A>,

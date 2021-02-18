@@ -13,9 +13,10 @@ import {Cycle, CycleAnalyzer, CycleHandlingStrategy} from '../../cycles';
 import {ErrorCode, FatalDiagnosticError, makeDiagnostic, makeRelatedInformation} from '../../diagnostics';
 import {absoluteFrom, relative} from '../../file_system';
 import {DefaultImportRecorder, ModuleResolver, Reference, ReferenceEmitter} from '../../imports';
-import {ComponentResolutionRegistry, DependencyTracker} from '../../incremental/api';
+import {DependencyTracker} from '../../incremental/api';
 import {IndexingContext} from '../../indexer';
 import {ClassPropertyMapping, ComponentResources, DirectiveMeta, DirectiveTypeCheckMeta, extractDirectiveTypeCheckMeta, InjectableClassRegistry, MetadataReader, MetadataRegistry, Resource, ResourceRegistry} from '../../metadata';
+import {SemanticDepGraphUpdater} from '../../ngmodule_semantics';
 import {SemanticSymbol} from '../../ngmodule_semantics/src/api';
 import {isArrayEqual, isSymbolEqual} from '../../ngmodule_semantics/src/util';
 import {EnumValue, PartialEvaluator, ResolvedValue} from '../../partial_evaluator';
@@ -31,6 +32,7 @@ import {createValueHasWrongTypeError, getDirectiveDiagnostics, getProviderDiagno
 import {DirectiveSymbol, extractDirectiveMetadata, parseFieldArrayValue} from './directive';
 import {compileNgFactoryDefField} from './factory';
 import {generateSetClassMetadataCall} from './metadata';
+import {NgModuleSymbol} from './ng_module';
 import {findAngularDecorator, isAngularCoreReference, isExpressionForwardReference, readBaseClass, resolveProvidersRequiringFactory, unwrapExpression, wrapFunctionExpressionsInParens} from './util';
 
 const EMPTY_MAP = new Map<string, Expression>();
@@ -149,7 +151,7 @@ export class ComponentSymbol extends DirectiveSymbol {
  * `DecoratorHandler` which handles the `@Component` annotation.
  */
 export class ComponentDecoratorHandler implements
-    DecoratorHandler<Decorator, ComponentAnalysisData, ComponentResolutionData> {
+    DecoratorHandler<Decorator, ComponentAnalysisData, ComponentSymbol, ComponentResolutionData> {
   constructor(
       private reflector: ReflectionHost, private evaluator: PartialEvaluator,
       private metaRegistry: MetadataRegistry, private metaReader: MetadataReader,
@@ -165,7 +167,7 @@ export class ComponentDecoratorHandler implements
       private defaultImportRecorder: DefaultImportRecorder,
       private depTracker: DependencyTracker|null,
       private injectableRegistry: InjectableClassRegistry,
-      private componentResolutionRegistry: ComponentResolutionRegistry,
+      private semanticDepGraphUpdater: SemanticDepGraphUpdater|null,
       private annotateForClosureCompiler: boolean) {}
 
   private literalCache = new Map<Decorator, ts.ObjectLiteralExpression>();
@@ -517,8 +519,9 @@ export class ComponentDecoratorHandler implements
         meta.template.sourceMapping, meta.template.file, meta.template.errors);
   }
 
-  resolve(node: ClassDeclaration, analysis: Readonly<ComponentAnalysisData>):
-      ResolveResult<ComponentResolutionData> {
+  resolve(
+      node: ClassDeclaration, analysis: Readonly<ComponentAnalysisData>,
+      symbol: ComponentSymbol): ResolveResult<ComponentResolutionData> {
     if (analysis.isPoisoned && !this.usePoisonedData) {
       return {};
     }
@@ -591,7 +594,6 @@ export class ComponentDecoratorHandler implements
           isComponent: directive.isComponent,
         };
       });
-
       type UsedPipe = {ref: Reference<ClassDeclaration>, pipeName: string, expression: Expression};
       const usedPipes: UsedPipe[] = [];
       for (const pipeName of bound.getUsedPipes()) {
@@ -604,6 +606,12 @@ export class ComponentDecoratorHandler implements
           pipeName,
           expression: this.refEmitter.emit(pipe, context),
         });
+      }
+      if (this.semanticDepGraphUpdater !== null) {
+        symbol.usedDirectives =
+            usedDirectives.map(dir => this.semanticDepGraphUpdater!.getSymbol(dir.ref.node));
+        symbol.usedPipes =
+            usedPipes.map(pipe => this.semanticDepGraphUpdater!.getSymbol(pipe.ref.node));
       }
 
       // Scan through the directives/pipes actually used in the template and check whether any
@@ -655,6 +663,18 @@ export class ComponentDecoratorHandler implements
           // NgModule file will take care of setting the directives for the component.
           this.scopeRegistry.setComponentRemoteScope(
               node, usedDirectives.map(dir => dir.ref), usedPipes.map(pipe => pipe.ref));
+          symbol.isRemotelyScoped = true;
+
+          if (this.semanticDepGraphUpdater !== null) {
+            const moduleSymbol = this.semanticDepGraphUpdater.getSymbol(scope.ngModule);
+            if (!(moduleSymbol instanceof NgModuleSymbol)) {
+              throw new Error(
+                  `AssertionError: Expected ${scope.ngModule.name} to be an NgModuleSymbol.`);
+            }
+
+            moduleSymbol.addRemotelyScopedComponent(
+                symbol, symbol.usedDirectives, symbol.usedPipes);
+          }
         } else {
           // We are not able to handle this cycle so throw an error.
           const relatedMessages: ts.DiagnosticRelatedInformation[] = [];
@@ -672,10 +692,6 @@ export class ComponentDecoratorHandler implements
               relatedMessages);
         }
       }
-
-      this.componentResolutionRegistry.register(
-          node, usedDirectives.map(dir => dir.ref.node), usedPipes.map(pipe => pipe.ref.node),
-          cycleDetected);
     }
 
     const diagnostics: ts.Diagnostic[] = [];

@@ -7,10 +7,8 @@
  */
 import * as ts from 'typescript';
 
-import {absoluteFromSourceFile, AbsoluteFsPath} from '../../file_system';
-import {ComponentResolutionRegistry} from '../../incremental/api';
+import {AbsoluteFsPath} from '../../file_system';
 import {ClassDeclaration} from '../../reflection';
-import {getSourceFile} from '../../util/src/typescript';
 
 import {SemanticSymbol, SymbolResolver} from './api';
 
@@ -115,22 +113,11 @@ export class SemanticDepGraph {
   }
 }
 
-function getSymbolIdentifier(decl: ClassDeclaration): string|null {
-  if (!ts.isSourceFile(decl.parent)) {
-    return null;
-  }
-
-  // If this is a top-level class declaration, the class name is used as unique identifier.
-  // Other scenarios are currently not supported and causes the symbol not to be identified
-  // across rebuilds, unless the declaration node has not changed.
-  return decl.name.text;
-}
-
 /**
  * Implements the logic to go from a previous dependency graph to a new one, along with information
  * on which files have been affected.
  */
-export class SemanticDepGraphUpdater implements ComponentResolutionRegistry {
+export class SemanticDepGraphUpdater {
   private readonly newGraph = new SemanticDepGraph();
 
   /**
@@ -146,27 +133,6 @@ export class SemanticDepGraphUpdater implements ComponentResolutionRegistry {
        */
       private priorGraph: SemanticDepGraph|null) {}
 
-  register(
-      component: ClassDeclaration, usedDirectives: ClassDeclaration[],
-      usedPipes: ClassDeclaration[], isRemotelyScoped: boolean): void {
-    const symbol = this.newGraph.getSymbolByDecl(component);
-
-    // The fact that the component is being registered requires that its analysis data has been
-    // recorded as a symbol, so it's an error for `symbol` to be missing or not to be a
-    // `ComponentSymbol`.
-    if (symbol === null) {
-      throw new Error(
-          `Illegal state: no symbol information available for component ${component.name.text}`);
-    } else if (!(symbol instanceof ComponentSymbol)) {
-      throw new Error(`Illegal state: symbol information should be for a component, got ${
-          symbol.constructor.name} for ${component.name.text}`);
-    }
-
-    symbol.usedDirectives = usedDirectives.map(dir => this.getSymbol(dir));
-    symbol.usedPipes = usedPipes.map(pipe => this.getSymbol(pipe));
-    symbol.isRemotelyScoped = isRemotelyScoped;
-  }
-
   registerSymbol(symbol: SemanticSymbol): void {
     this.newGraph.registerSymbol(symbol);
   }
@@ -177,8 +143,6 @@ export class SemanticDepGraphUpdater implements ComponentResolutionRegistry {
    * need to be emitted and/or type-checked.
    */
   finalize(): SemanticDependencyResult {
-    this.connect();
-
     if (this.priorGraph === null) {
       // If no prior dependency graph is available then this was the initial build, in which case
       // we don't need to determine the semantic impact as everything is already considered
@@ -194,22 +158,6 @@ export class SemanticDepGraphUpdater implements ComponentResolutionRegistry {
       needsEmit,
       newGraph: this.newGraph,
     };
-  }
-
-  /**
-   * Implements the first phase of the semantic invalidation algorithm by connecting all symbols
-   * together.
-   */
-  private connect(): void {
-    const symbolResolver: SymbolResolver = decl => this.getSymbol(decl);
-
-    for (const symbol of this.newGraph.symbolByDecl.values()) {
-      if (symbol.connect === undefined) {
-        continue;
-      }
-
-      symbol.connect(symbolResolver);
-    }
   }
 
   private determineInvalidatedFiles(priorGraph: SemanticDepGraph): Set<AbsoluteFsPath> {
@@ -242,7 +190,7 @@ export class SemanticDepGraphUpdater implements ComponentResolutionRegistry {
     return needsEmit;
   }
 
-  private getSymbol(decl: ClassDeclaration): SemanticSymbol {
+  getSymbol(decl: ClassDeclaration): SemanticSymbol {
     const symbol = this.newGraph.getSymbolByDecl(decl);
     if (symbol === null) {
       // No symbol has been recorded for the provided declaration, which would be the case if the

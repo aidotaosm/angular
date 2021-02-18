@@ -200,11 +200,13 @@ class TraitImpl<D, A, S extends SemanticSymbol|null, R> {
     this.detected = detected;
   }
 
-  toAnalyzed(analysis: A|null, diagnostics: ts.Diagnostic[]|null): AnalyzedTrait<D, A, S, R> {
+  toAnalyzed(analysis: A|null, diagnostics: ts.Diagnostic[]|null, symbol: S):
+      AnalyzedTrait<D, A, S, R> {
     // Only pending traits can be analyzed.
     this.assertTransitionLegal(TraitState.Pending, TraitState.Analyzed);
     this.analysis = analysis;
     this.analysisDiagnostics = diagnostics;
+    this.symbol = symbol;
     this.state = TraitState.Analyzed;
     return this as AnalyzedTrait<D, A, S, R>;
   }

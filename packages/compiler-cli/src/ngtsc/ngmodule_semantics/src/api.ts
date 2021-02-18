@@ -60,15 +60,6 @@ export abstract class SemanticSymbol {
     this.identifier = getSymbolIdentifier(decl);
   }
 
-
-  /**
-   * Allows the symbol to connect itself to other symbols. This is called for all registered
-   * symbols, before the symbol is compared against its previous symbol in `diff`.
-   *
-   * @param resolve A function to obtain the symbol for a declaration.
-   */
-  connect?(resolve: SymbolResolver): void;
-
   /**
    * Allows the symbol to be compared to the symbol that had the same identifier in the previous
    * compilation. The return value indicates how the changes affect the current compilation.

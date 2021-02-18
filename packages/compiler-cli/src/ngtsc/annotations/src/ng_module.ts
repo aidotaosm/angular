@@ -12,7 +12,8 @@ import * as ts from 'typescript';
 import {ErrorCode, FatalDiagnosticError, makeDiagnostic, makeRelatedInformation} from '../../diagnostics';
 import {DefaultImportRecorder, Reference, ReferenceEmitter} from '../../imports';
 import {InjectableClassRegistry, MetadataReader, MetadataRegistry} from '../../metadata';
-import {SemanticSymbol, SymbolResolver} from '../../ngmodule_semantics/src/api';
+import {SemanticSymbol} from '../../ngmodule_semantics/src/api';
+import {isArrayEqual, isSymbolEqual} from '../../ngmodule_semantics/src/util';
 import {PartialEvaluator, ResolvedValue} from '../../partial_evaluator';
 import {ClassDeclaration, Decorator, isNamedClassDeclaration, ReflectionHost, reflectObjectLiteral, typeNodeToValueExpr} from '../../reflection';
 import {NgModuleRouteAnalyzer} from '../../routing';
@@ -20,7 +21,6 @@ import {LocalModuleScopeRegistry, ScopeData} from '../../scope';
 import {FactoryTracker} from '../../shims/api';
 import {AnalysisOutput, CompileResult, DecoratorHandler, DetectResult, HandlerPrecedence, ResolveResult} from '../../transform';
 import {getSourceFile} from '../../util/src/typescript';
-import {ComponentSymbol} from './component';
 
 import {createValueHasWrongTypeError, getProviderDiagnostics} from './diagnostics';
 import {generateSetClassMetadataCall} from './metadata';
@@ -50,19 +50,9 @@ export interface NgModuleResolution {
  * Represents an Angular NgModule.
  */
 export class NgModuleSymbol extends SemanticSymbol {
-  private hasRemoteScopes = false;
-
-  constructor(decl: ClassDeclaration, private readonly rawDeclarations: ClassDeclaration[]) {
-    super(decl);
-  }
-
-  connect(resolve: SymbolResolver): void {
-    const declarations = this.rawDeclarations.map(resolve);
-
-    // An NgModule has remote scopes if any of its declared components is remotely scoped.
-    this.hasRemoteScopes =
-        declarations.some(symbol => symbol instanceof ComponentSymbol && symbol.isRemotelyScoped);
-  }
+  private remotelyScopedComponents:
+      {usedDirectives: SemanticSymbol[], usedPipes: SemanticSymbol[], component: SemanticSymbol}[] =
+          [];
 
   isPublicApiAffected(previousSymbol: SemanticSymbol): boolean {
     if (!(previousSymbol instanceof NgModuleSymbol)) {
@@ -78,9 +68,34 @@ export class NgModuleSymbol extends SemanticSymbol {
       return true;
     }
 
-    // The NgModule needs to be re-emitted if it does no longer have any remote scopes, or vice
-    // versa.
-    return this.hasRemoteScopes !== previousSymbol.hasRemoteScopes;
+    // compare our remotelyScopedComponents to the previous symbol
+    if (previousSymbol.remotelyScopedComponents.length !== this.remotelyScopedComponents.length) {
+      return true;
+    }
+
+    for (const currEntry of this.remotelyScopedComponents) {
+      const prevEntry = previousSymbol.remotelyScopedComponents.find(prevEntry => {
+        return isSymbolEqual(prevEntry.component, currEntry.component);
+      });
+
+      if (prevEntry === undefined) {
+        return true;
+      }
+
+      if (!isArrayEqual(currEntry.usedDirectives, prevEntry.usedDirectives, isSymbolEqual)) {
+        return true;
+      }
+
+      if (!isArrayEqual(currEntry.usedPipes, prevEntry.usedPipes, isSymbolEqual)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  addRemotelyScopedComponent(
+      symbol: SemanticSymbol, usedDirectives: SemanticSymbol[], usedPipes: SemanticSymbol[]) {
+    this.remotelyScopedComponents.push({usedDirectives, usedPipes, component: symbol});
   }
 }
 
@@ -90,7 +105,7 @@ export class NgModuleSymbol extends SemanticSymbol {
  * TODO(alxhub): handle injector side of things as well.
  */
 export class NgModuleDecoratorHandler implements
-    DecoratorHandler<Decorator, NgModuleAnalysis, NgModuleResolution> {
+    DecoratorHandler<Decorator, NgModuleAnalysis, NgModuleSymbol, NgModuleResolution> {
   constructor(
       private reflector: ReflectionHost, private evaluator: PartialEvaluator,
       private metaReader: MetadataReader, private metaRegistry: MetadataRegistry,
@@ -333,8 +348,8 @@ export class NgModuleDecoratorHandler implements
     };
   }
 
-  symbol(node: ClassDeclaration, analysis: Readonly<NgModuleAnalysis>): NgModuleSymbol {
-    return new NgModuleSymbol(node, analysis.declarations.map(ref => ref.node));
+  symbol(node: ClassDeclaration): NgModuleSymbol {
+    return new NgModuleSymbol(node);
   }
 
   register(node: ClassDeclaration, analysis: NgModuleAnalysis): void {

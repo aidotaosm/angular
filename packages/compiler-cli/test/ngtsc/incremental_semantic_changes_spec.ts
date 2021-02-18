@@ -14,7 +14,7 @@ import {NgtscTestEnvironment} from './env';
 const testFiles = loadStandardTestFiles();
 
 runInEachFileSystem(() => {
-  fdescribe('ngtsc incremental compilation (semantic changes)', () => {
+  describe('ngtsc incremental compilation (semantic changes)', () => {
     let env!: NgtscTestEnvironment;
 
     beforeEach(() => {
